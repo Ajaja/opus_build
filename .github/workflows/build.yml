@@ -53,13 +53,17 @@ jobs:
           set -e
           mkdir -p "$GITHUB_WORKSPACE/src"
           cd "$GITHUB_WORKSPACE/src"
-          git clone --depth 1 https://gitlab.xiph.org/xiph/ogg.git
-          git clone --depth 1 https://gitlab.xiph.org/xiph/opus.git
-          git clone --depth 1 https://gitlab.xiph.org/xiph/opusfile.git
-          git clone --depth 1 https://gitlab.xiph.org/xiph/libopusenc.git
-          git clone --depth 1 https://gitlab.xiph.org/xiph/opus-tools.git
+          # Full clones (not shallow): opus and FLAC derive their pkg-config
+          # version via `git describe --tags`, which needs real tag history.
+          # A --depth 1 clone has no tags and produces version "unknown",
+          # which then fails downstream pkg-config version checks.
+          git clone https://gitlab.xiph.org/xiph/ogg.git
+          git clone https://gitlab.xiph.org/xiph/opus.git
+          git clone https://gitlab.xiph.org/xiph/opusfile.git
+          git clone https://gitlab.xiph.org/xiph/libopusenc.git
+          git clone https://gitlab.xiph.org/xiph/opus-tools.git
           # FLAC input support for opusenc; official repo lives on GitHub.
-          git clone --depth 1 https://github.com/xiph/flac.git
+          git clone https://github.com/xiph/flac.git
 
       - name: Build libogg (static)
         run: |
