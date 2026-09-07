@@ -45,7 +45,12 @@ jobs:
         run: |
           echo "PREFIX=/clang64" >> "$GITHUB_ENV"
           echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
-          echo "LDFLAGS=-static -s" >> "$GITHUB_ENV"
+          # -static alone leaves libwinpthread dynamically linked in practice:
+          # the autotools scripts insert -lwinpthread into the link line in a
+          # position where GNU ld's -Bstatic/-Bdynamic toggling doesn't apply
+          # cleanly, so it still resolves to the DLL import stub. Forcing the
+          # exact static file by name sidesteps that ordering ambiguity.
+          echo "LDFLAGS=-static -s -l:libwinpthread.a" >> "$GITHUB_ENV"
           echo "PKG_CONFIG=pkg-config --static" >> "$GITHUB_ENV"
           # FLAC's public headers __declspec(dllimport)-decorate every
           # function unless the consumer defines FLAC__NO_DLL. FLAC's CMake
