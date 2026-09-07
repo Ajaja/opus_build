@@ -1,0 +1,123 @@
+name: Build Opus Tools (Windows x64 / MSYS2 CLANG64)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Set up MSYS2 (CLANG64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            base-devel
+            git
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-libogg
+            mingw-w64-clang-x86_64-flac
+
+      - name: Set environment
+        run: |
+          echo "PREFIX=/clang64" >> "$GITHUB_ENV"
+          echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - name: Clone sources
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/src"
+          cd "$GITHUB_WORKSPACE/src"
+          git clone --depth 1 https://gitlab.xiph.org/xiph/opus.git
+          git clone --depth 1 https://gitlab.xiph.org/xiph/opusfile.git
+          git clone --depth 1 https://gitlab.xiph.org/xiph/libopusenc.git
+          git clone --depth 1 https://gitlab.xiph.org/xiph/opus-tools.git
+
+      # libopus: newer checkouts sometimes ship CMake-only, older ones use autotools.
+      # This handles either case automatically.
+      - name: Build libopus
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/opus"
+          if [ -f autogen.sh ]; then
+            ./autogen.sh
+            ./configure --prefix="$PREFIX"
+            make
+            make install
+          else
+            cmake -B build -G Ninja \
+              -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+              -DCMAKE_BUILD_TYPE=Release
+            cmake --build build
+            cmake --install build
+          fi
+
+      - name: Build opusfile
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/opusfile"
+          ./autogen.sh
+          # HTTP streaming support needs OpenSSL/LibreSSL; not needed for local file
+          # decoding via opusdec/opusinfo, so it's disabled to keep the build simple.
+          ./configure --prefix="$PREFIX" --disable-http
+          make
+          make install
+
+      - name: Build libopusenc
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/libopusenc"
+          ./autogen.sh
+          ./configure --prefix="$PREFIX"
+          make
+          make install
+
+      - name: Build opus-tools
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/opus-tools"
+          ./autogen.sh
+          ./configure --prefix="$PREFIX"
+          make
+          make install
+
+      - name: Collect executables and dependency DLLs
+        run: |
+          set -e
+          OUT="$GITHUB_WORKSPACE/artifact"
+          mkdir -p "$OUT"
+
+          for exe in opusenc opusdec opusinfo; do
+            found=$(find "$GITHUB_WORKSPACE/src/opus-tools" -name "${exe}.exe" | head -n1)
+            if [ -z "$found" ]; then
+              echo "ERROR: ${exe}.exe was not produced by the build"
+              exit 1
+            fi
+            cp "$found" "$OUT/"
+          done
+
+          cd "$OUT"
+          # Bundle any non-system DLLs (built or installed under /clang64) so the
+          # executables are portable outside the MSYS2 environment.
+          deps=$(ldd *.exe | grep -oiE '/clang64/bin/[^ ]+\.dll' | sort -u)
+          for dll in $deps; do
+            cp -n "$dll" .
+          done
+
+          echo "Artifact contents:"
+          ls -la "$OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opus-tools-windows-x64-clang64
+          path: artifact/*
+          if-no-files-found: error
