@@ -47,6 +47,12 @@ jobs:
           echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
           echo "LDFLAGS=-static -s" >> "$GITHUB_ENV"
           echo "PKG_CONFIG=pkg-config --static" >> "$GITHUB_ENV"
+          # FLAC's public headers __declspec(dllimport)-decorate every
+          # function unless the consumer defines FLAC__NO_DLL. FLAC's CMake
+          # build doesn't add this to its .pc Cflags even for a static-only
+          # build, so anything linking libFLAC.a statically (opus-tools'
+          # src/flac.c) needs it defined explicitly here.
+          echo "CPPFLAGS=-DFLAC__NO_DLL" >> "$GITHUB_ENV"
 
       - name: Clone sources
         run: |
@@ -153,6 +159,7 @@ jobs:
             [opusdec]=opus-tools
             [opusinfo]=opus-tools
             [flac]=flac
+            [metaflac]=flac
           )
 
           for exe in "${!EXES[@]}"; do
