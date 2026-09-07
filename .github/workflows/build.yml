@@ -45,7 +45,7 @@ jobs:
         run: |
           echo "PREFIX=/clang64" >> "$GITHUB_ENV"
           echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
-          echo "LDFLAGS=-static" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-static -s" >> "$GITHUB_ENV"
           echo "PKG_CONFIG=pkg-config --static" >> "$GITHUB_ENV"
 
       - name: Clone sources
@@ -103,7 +103,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_CXXLIBS=OFF \
-            -DBUILD_PROGRAMS=OFF \
+            -DBUILD_PROGRAMS=ON \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_TESTING=OFF \
             -DBUILD_DOCS=OFF \
@@ -147,8 +147,17 @@ jobs:
           OUT="$GITHUB_WORKSPACE/artifact"
           mkdir -p "$OUT"
 
-          for exe in opusenc opusdec opusinfo; do
-            found=$(find "$GITHUB_WORKSPACE/src/opus-tools" -name "${exe}.exe" | head -n1)
+          # exe name -> repo dir it was built in
+          declare -A EXES=(
+            [opusenc]=opus-tools
+            [opusdec]=opus-tools
+            [opusinfo]=opus-tools
+            [flac]=flac
+          )
+
+          for exe in "${!EXES[@]}"; do
+            repo="${EXES[$exe]}"
+            found=$(find "$GITHUB_WORKSPACE/src/$repo" -name "${exe}.exe" | head -n1)
             if [ -z "$found" ]; then
               echo "ERROR: ${exe}.exe was not produced by the build"
               exit 1
@@ -157,6 +166,12 @@ jobs:
           done
 
           cd "$OUT"
+
+          # Belt-and-suspenders: strip debug/symbol info explicitly in case
+          # LDFLAGS=-s wasn't honored by a given build (e.g. some CMake
+          # targets can override linker flags).
+          strip --strip-all *.exe
+
           echo "== ldd output =="
           ldd *.exe || true
 
@@ -174,6 +189,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opus-tools-windows-x64-clang64-static
+          name: opus-tools-flac-windows-x64-clang64-static
           path: artifact/*
           if-no-files-found: error
