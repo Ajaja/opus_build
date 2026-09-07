@@ -1,4 +1,4 @@
-name: Build Opus Tools (Windows x64 / MSYS2 CLANG64)
+name: Build Opus Tools (Windows x64 / MSYS2 CLANG64, fully static)
 
 on:
   workflow_dispatch:
@@ -23,64 +23,100 @@ jobs:
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-pkgconf
-            mingw-w64-clang-x86_64-libogg
-            mingw-w64-clang-x86_64-flac
 
+      # Everything gets installed into the CLANG64 prefix so pkg-config finds
+      # each library automatically as later steps build against it.
+      # LDFLAGS=-static + PKG_CONFIG="pkg-config --static" force fully static
+      # linking end-to-end, including transitive deps pulled in via
+      # Libs.private in each .pc file (e.g. opusfile -> opus, ogg).
       - name: Set environment
         run: |
           echo "PREFIX=/clang64" >> "$GITHUB_ENV"
           echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-static" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG=pkg-config --static" >> "$GITHUB_ENV"
 
       - name: Clone sources
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/src"
           cd "$GITHUB_WORKSPACE/src"
+          git clone --depth 1 https://gitlab.xiph.org/xiph/ogg.git
           git clone --depth 1 https://gitlab.xiph.org/xiph/opus.git
           git clone --depth 1 https://gitlab.xiph.org/xiph/opusfile.git
           git clone --depth 1 https://gitlab.xiph.org/xiph/libopusenc.git
           git clone --depth 1 https://gitlab.xiph.org/xiph/opus-tools.git
+          # FLAC input support for opusenc; official repo lives on GitHub.
+          git clone --depth 1 https://github.com/xiph/flac.git
 
-      # libopus: newer checkouts sometimes ship CMake-only, older ones use autotools.
-      # This handles either case automatically.
-      - name: Build libopus
+      - name: Build libogg (static)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/ogg"
+          ./autogen.sh
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared
+          make
+          make install
+
+      # Tries autotools first, falls back to CMake for checkouts that have
+      # moved to a CMake-only build.
+      - name: Build libopus (static)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/src/opus"
           if [ -f autogen.sh ]; then
             ./autogen.sh
-            ./configure --prefix="$PREFIX"
+            ./configure --prefix="$PREFIX" --enable-static --disable-shared
             make
             make install
           else
             cmake -B build -G Ninja \
               -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-              -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF
             cmake --build build
             cmake --install build
           fi
 
-      - name: Build opusfile
+      - name: Build FLAC (static)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/src/flac"
+          cmake -B build -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_CXXLIBS=OFF \
+            -DBUILD_PROGRAMS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_DOCS=OFF \
+            -DINSTALL_MANPAGES=OFF \
+            -DWITH_OGG=ON
+          cmake --build build
+          cmake --install build
+
+      - name: Build opusfile (static)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/src/opusfile"
           ./autogen.sh
-          # HTTP streaming support needs OpenSSL/LibreSSL; not needed for local file
-          # decoding via opusdec/opusinfo, so it's disabled to keep the build simple.
-          ./configure --prefix="$PREFIX" --disable-http
+          # HTTP streaming needs OpenSSL/LibreSSL; not needed for local file
+          # decoding via opusdec/opusinfo, so it's disabled.
+          ./configure --prefix="$PREFIX" --disable-http --enable-static --disable-shared
           make
           make install
 
-      - name: Build libopusenc
+      - name: Build libopusenc (static)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/src/libopusenc"
           ./autogen.sh
-          ./configure --prefix="$PREFIX"
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared
           make
           make install
 
-      - name: Build opus-tools
+      - name: Build opus-tools (static executables)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/src/opus-tools"
@@ -89,7 +125,7 @@ jobs:
           make
           make install
 
-      - name: Collect executables and dependency DLLs
+      - name: Collect executables and verify they are static
         run: |
           set -e
           OUT="$GITHUB_WORKSPACE/artifact"
@@ -105,19 +141,23 @@ jobs:
           done
 
           cd "$OUT"
-          # Bundle any non-system DLLs (built or installed under /clang64) so the
-          # executables are portable outside the MSYS2 environment.
-          deps=$(ldd *.exe | grep -oiE '/clang64/bin/[^ ]+\.dll' | sort -u)
-          for dll in $deps; do
-            cp -n "$dll" .
-          done
+          echo "== ldd output =="
+          ldd *.exe || true
 
-          echo "Artifact contents:"
+          # Fail the build if anything still pulls in a DLL from the MSYS2/
+          # toolchain tree -- that would mean static linking didn't fully
+          # take effect somewhere.
+          if ldd *.exe 2>/dev/null | grep -iE '/(clang64|mingw64|usr)/'; then
+            echo "ERROR: one or more executables still depend on non-system DLLs"
+            exit 1
+          fi
+
+          echo "All executables are fully static."
           ls -la "$OUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opus-tools-windows-x64-clang64
+          name: opus-tools-windows-x64-clang64-static
           path: artifact/*
           if-no-files-found: error
