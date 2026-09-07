@@ -18,6 +18,10 @@ jobs:
           update: true
           install: >-
             base-devel
+            autoconf
+            automake
+            libtool
+            m4
             git
             mingw-w64-clang-x86_64-toolchain
             mingw-w64-clang-x86_64-cmake
@@ -29,6 +33,14 @@ jobs:
       # LDFLAGS=-static + PKG_CONFIG="pkg-config --static" force fully static
       # linking end-to-end, including transitive deps pulled in via
       # Libs.private in each .pc file (e.g. opusfile -> opus, ogg).
+      - name: Sanity-check toolchain
+        run: |
+          set -e
+          for tool in autoreconf automake libtool pkg-config cmake ninja; do
+            command -v "$tool" >/dev/null || { echo "ERROR: $tool not found on PATH"; exit 1; }
+          done
+          echo "All required build tools found."
+
       - name: Set environment
         run: |
           echo "PREFIX=/clang64" >> "$GITHUB_ENV"
